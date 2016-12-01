@@ -1,17 +1,18 @@
 package main
 
 import (
+	"runtime"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math"
 	"math/rand"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
-
-	"github.com/julienschmidt/httprouter"
+	"sort"
 )
 
 type Result struct {
@@ -25,28 +26,34 @@ type Data struct {
 
 var port = 3000
 var host = "127.0.0.1"
+var mode = "gen"
+var api_url = "http://127.0.0.1:3000/perftest/gen"
 var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 
-func average(xs []float64) float64 {
-	total := 0.0
-	for _, v := range xs {
-		total += v
+func median(xs []float64) float64 {
+	sort.Float64s(xs)
+	l := len(xs)
+	if l == 0 {
+		return math.NaN()
+	} else if l%2 == 0 {
+		return (xs[l/2-1] + xs[l/2+1])/2
+	} else {
+		return float64(xs[l/2])
 	}
-	return total / float64(len(xs))
 }
 
 func makeData(sample_size int) []float64 {
 	l := make([]float64, sample_size)
 
-	for i := range l {
-		l[i] = r.Float64()
+	for i := 0; i < sample_size; i++ {
+		l = append(l, r.Float64())
 	}
 
 	return l
 }
 
-func genHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	v := ps.ByName("sample_size")
+func genHandler(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("sample_size")
 	sample_size, err := strconv.Atoi(v)
 
 	if err != nil {
@@ -64,8 +71,8 @@ func genHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	fmt.Fprintf(w, string(b))
 }
 
-func getHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	v := ps.ByName("sample_size")
+func getHandler(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("sample_size")
 	sample_size := 100
 	if v != "" {
 		i, err := strconv.Atoi(v)
@@ -77,7 +84,7 @@ func getHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		}
 	}
 
-	resp, err := http.Get(fmt.Sprintf("http://%s:%d/perftest/gen/%d", host, port, sample_size))
+	resp, err := http.Get(fmt.Sprintf("%s?sample_size=%d", api_url, sample_size))
 	if err != nil {
 		log.Printf("unable to parse sample_size: %v\n", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -97,7 +104,7 @@ func getHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 
-	result := &Result{sample_size, average(data.Data)}
+	result := &Result{sample_size, median(data.Data)}
 	b, err := json.Marshal(result)
 	if err != nil {
 		panic(err)
@@ -107,18 +114,29 @@ func getHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 }
 
 func main() {
-	if len(os.Args) >= 2 {
-		port, _ = strconv.Atoi(os.Args[1])
-	}
-	if len(os.Args) >= 3 {
-		host = os.Args[2]
+	flag.IntVar(&port, "port", 3000, "Port number")
+	flag.StringVar(&host, "bind", "127.0.0.1", "Bind address")
+	flag.StringVar(&mode, "mode", "gen", "gen | get")
+	flag.StringVar(&api_url, "api_url", "http://127.0.0.1:3000/perftest/gen", "gen api url")
+	flag.Parse()
+
+	// router := httprouter.New()
+	// switch mode {
+	// case "gen":
+	// 	router.GET("/perftest/gen/:sample_size", genHandler)
+	// case "get":
+	// 	router.GET("/perftest/get/:sample_size", getHandler)
+	// }
+
+	switch mode {
+	case "gen":
+		http.HandleFunc("/perftest/gen", genHandler)
+	case "get":
+		http.HandleFunc("/perftest/get", getHandler)
 	}
 
-	router := httprouter.New()
-	router.GET("/perftest/get/:sample_size", getHandler)
-	router.GET("/perftest/gen/:sample_size", genHandler)
-
+	fmt.Printf("GOMAXPROCS=%d\n", runtime.GOMAXPROCS(-1))
 	fmt.Printf("http://%s:%d\n", host, port)
 
-	http.ListenAndServe(fmt.Sprintf("%s:%d", host, port), router)
+	http.ListenAndServe(fmt.Sprintf("%s:%d", host, port), nil)
 }
