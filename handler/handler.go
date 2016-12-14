@@ -37,13 +37,16 @@ func (h *PerftestHandler) average(xs []float64) float64 {
 	return total / float64(len(xs))
 }
 
-func (h *PerftestHandler) makeData(sample_size int) []float64 {
+func (h *PerftestHandler) makeData(sample_size int, number_of_copy int) []float64 {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	l := make([]float64, sample_size)
+	l := make([]float64, sample_size * number_of_copy)
 
-	for i := range l {
+	for i := 0; i < sample_size; i++ {
 		l[i] = r.Float64()
+		for j := 0; j < number_of_copy; j++ {
+			l[i+ sample_size*j] = l[i]
+		}
 	}
 
 	return l
@@ -51,15 +54,25 @@ func (h *PerftestHandler) makeData(sample_size int) []float64 {
 
 func (h *PerftestHandler) RawDataSourceHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	sample_size := 200
+	num_copy := 1
 	response_time := 0
 	var err error
 
-	// v := ps.ByName("sample_size")
 	v := r.URL.Query().Get("sample_size")
 	if v != "" {
 		sample_size, err = strconv.Atoi(v)
 		if err != nil {
 			log.Printf("bad sample_size: %v\n", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	v = r.URL.Query().Get("num_copy")
+	if v != "" {
+		num_copy, err = strconv.Atoi(v)
+		if err != nil {
+			log.Printf("bad num_copy: %v\n", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -80,7 +93,7 @@ func (h *PerftestHandler) RawDataSourceHandler(w http.ResponseWriter, r *http.Re
 		timer = time.After(time.Duration(response_time) * time.Millisecond)
 	}
 
-	data := &result{sample_size, h.makeData(sample_size)}
+	data := &result{sample_size*num_copy, h.makeData(sample_size, num_copy)}
 
 	b, err := json.Marshal(data)
 	if err != nil {
